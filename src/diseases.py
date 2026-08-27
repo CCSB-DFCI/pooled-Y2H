@@ -1,11 +1,10 @@
 import functools
 
+import networkx as nx
 import numpy as np
+import obonet
 import pandas as pd
 from joblib import Memory
-import networkx as nx
-import obonet
-
 
 memory = Memory("../cache", verbose=0)
 
@@ -39,6 +38,7 @@ def add_clinvar_phenotypes(df):
         raise UserWarning("Merge changed number of rows")
 
     df["cv_allele_id"] = df["#AlleleID"]
+    df["cv_allele_id"] = df["cv_allele_id"].astype(pd.Int64Dtype())
     df["cv_clinical_significance"] = df["ClinicalSignificance"]
     df["cv_phenotypes"] = df["PhenotypeList"]
     df["cv_phenotype_ids"] = df["PhenotypeIDS"]
@@ -304,7 +304,7 @@ def most_specific_common_superterm(mondo, terms):
     return min(common, key=lambda x: n_subterms(x, mondo))
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def n_subterms(mondo_id, mondo):
     return len(nx.ancestors(mondo, mondo_id))
 

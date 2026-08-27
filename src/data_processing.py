@@ -8,36 +8,34 @@ TODO
 
 """
 
-import re
 import functools
 import json
+import re
 from pathlib import Path
 
 import numpy as np
-from scipy import stats, optimize
 import pandas as pd
-from statsmodels.stats.meta_analysis import combine_effects
+import pyBigWig
 from Bio.Align import substitution_matrices
 from Bio.Data import IUPACData
-import pyBigWig
+from statsmodels.stats.meta_analysis import combine_effects
 
+from alphafold_dimer_models import add_AF3_dimer_info
+from alphafold_monomer_properties import add_alphafold_monomer_properties
+from config import (
+    MIN_POOL_FRACTION_RELATIVE_TO_EXPECTED,
+    MIN_READS_IN_LW,
+    MIN_READS_WT_3AT,
+)
+from diseases import add_clinvar_phenotypes, add_mode_of_inheritance, add_mondo_ids
+from gnomad_api import add_allele_frequency
 from mapping_to_reference_sequences import (
     add_uniprot_aa_pos_mapping,
     test_uniprot_mappings,
 )
-from utils import _get_n_replicates
-from config import (
-    MIN_READS_IN_LW,
-    MIN_READS_WT_3AT,
-    MIN_POOL_FRACTION_RELATIVE_TO_EXPECTED,
-)
-from diseases import add_clinvar_phenotypes, add_mondo_ids, add_mode_of_inheritance
 from plotting import plot_filtering_summary, plot_growth_scores_by_gene_pies
-from gnomad_api import add_allele_frequency
-from alphafold_monomer_properties import add_alphafold_monomer_properties
+from utils import _get_n_replicates
 from variant_effect_predictors import add_alphamissense_column
-from alphafold_dimer_models import add_AF3_dimer_info
-
 
 EMPTY_AD_ID = 0
 
@@ -77,7 +75,7 @@ def load_combined_pooled_Y2H_dataset(
         "HsVcPillar2a6",
         "HsVcPPILacVa1",
         "HsVcPPILacVa1AD",
-        "HsVcPPILacVa2",  # NOTE I think we considered not including this one because the reproducibility was bad
+        "HsVcPPILacVa2rdo",
         "HsVcPPILacVa6",
         #'HsVcPPILiqPt1',
         "HsVcPPIMLHSTAT",
@@ -389,7 +387,7 @@ def validate_growth_scores_table(df, file_path=None):
     # Growth scores between 0-4 + NA
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def load_variant_info(variants_data_path="../data/internal/CCSB_variants_info.tsv"):
     vars = pd.read_csv(variants_data_path, sep="\t", low_memory=False)
 
@@ -604,7 +602,6 @@ def _add_growth_scores(df, file_path_growth_scores, make_plots=False):
             output_dir=f"../output/figures/{df['experiment'].iloc[0]}",
             close_fig=True,
         )
-    tb["well_minus_mapped"] = tb["well_read_cnt"] - tb["mapped_read_cnt"]
 
     for rep in range(1, 4):
         for media in ["LW", "3AT"]:
@@ -616,25 +613,6 @@ def _add_growth_scores(df, file_path_growth_scores, make_plots=False):
                 ].rename(columns={"y2h_score": f"growth_score_{media}_{rep}"}),
                 on=merge_columns,
                 how="left",
-            )
-
-    tb["pct_well_to_mapped"] = (tb["mapped_read_cnt"] / tb["well_read_cnt"]) * 100
-
-    merge_columns = ["symbol", "pool_id", "interactor_id"]
-    for rep in range(1, 4):
-        for media in ["LW", "3AT"]:
-            df = pd.merge(
-                df,
-                tb.loc[
-                    (tb["media"] == media) & (tb["repeat_id"] == rep),
-                    merge_columns + ["pct_well_to_mapped"],
-                ].rename(
-                    columns={
-                        "pct_well_to_mapped": f"pct_well_to_mapped_{media}_rep{rep}"
-                    }
-                ),
-                how="left",
-                on=merge_columns,
             )
 
     n_rep = _get_n_replicates(df)
@@ -971,14 +949,7 @@ def calc_stats_combined_across_replicates(row, n_rep=3, ref="WT"):
     )
     log2fc = log2fc[~np.isnan(log2fc)]
     var = var[~np.isnan(var)]
-    if len(log2fc) == 0:
-        return pd.Series(
-            {
-                f"log2FC{ref_suffix}_combined": np.nan,
-                f"error_log2FC{ref_suffix}_combined": np.nan,
-            }
-        )
-    elif len(log2fc) == 1:
+    if len(log2fc) == 0 or len(log2fc) == 1:
         return pd.Series(
             {
                 f"log2FC{ref_suffix}_combined": np.nan,
@@ -1189,7 +1160,7 @@ def _merge_values(group):
     out = group.iloc[0].copy()
     # WARNING: this is a bit dangerous, e.g. log2FC could show up in a future
     # variable we want to keep
-    ptn = r"read_cnt|total_read|log2FC|growth_score|pct_well_to_mapped|^pool_id$|^p_val_combined$|^z_score$|^perturbation_LLR$|^perturbation_status$"
+    ptn = r"read_cnt|total_read|log2FC|growth_score|^pool_id$|^p_val_combined$|^z_score$|^perturbation_LLR$|^perturbation_status$"
     out[[c for c in group.columns if bool(re.search(ptn, c))]] = np.nan
     out["experiment"] = "merge:" + "|".join(group["experiment"].unique())
     out["is_merge_within_experiment"] = group["is_merge_within_experiment"].any()
